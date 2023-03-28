@@ -12,14 +12,10 @@ from typing import Optional
 
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
-from aind_data_schema.data_description import (
-    DataRegex,
-    DerivedDataDescription,
-    Funding,
-    Institution,
-    Modality,
-    build_data_name,
-)
+from aind_data_schema.data_description import (DataRegex,
+                                               DerivedDataDescription, Funding,
+                                               Institution, Modality,
+                                               build_data_name)
 from botocore.exceptions import ClientError
 
 
@@ -141,11 +137,15 @@ def upload_derived_data_contents_to_s3(
         if dryrun:
             base_command.append("--dryrun")
         subprocess.run(base_command, shell=shell)
-    return s3_prefix
+    return s3_prefix, subject_id
 
 
 def register_to_codeocean(
-    param_store_name: str, secrets_name: str, s3_bucket: str, s3_prefix: str
+    param_store_name: str,
+    secrets_name: str,
+    s3_bucket: str,
+    s3_prefix: str,
+    subject_id: str,
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
@@ -154,12 +154,22 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
+    # It'd be nice if these were pulled from an Enum
+    custom_metadata = {
+        "modality": "extracellular electrophysiology",
+        "data level": "derived data",
+        "subject id": subject_id,
+    }
+    tags = ["ecephys", subject_id, "curated"]
+
     co_job_params = {
         "trigger_codeocean_job": {
             "job_type": "register_data",
             "capsule_id": capsule_id,
             "bucket": s3_bucket,
             "prefix": s3_prefix,
+            "tags": tags,
+            "custom_metadata": custom_metadata,
         }
     }
 
@@ -187,7 +197,7 @@ if __name__ == "__main__":
     print("Ecephys folders added in last commit: ", folders_added)
 
     for folder_name in folders_added:
-        s3_prefix = upload_derived_data_contents_to_s3(
+        s3_prefix, subject_id = upload_derived_data_contents_to_s3(
             path_to_curated_dir=Path(folder_name),
             s3_bucket=args.s3_bucket,
             datetime_from_commit=datetime_of_commit,
@@ -199,6 +209,7 @@ if __name__ == "__main__":
                 secrets_name=args.secrets_name,
                 s3_bucket=args.s3_bucket,
                 s3_prefix=s3_prefix,
+                subject_id=subject_id,
             )
         else:
             print(
