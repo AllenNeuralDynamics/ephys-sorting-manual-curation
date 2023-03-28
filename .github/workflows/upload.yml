@@ -1,0 +1,29 @@
+name: Upload data
+on:
+  push:
+    branches:
+      - main
+jobs:
+  upload-folder:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY}}
+      AWS_BUCKET: 'aind-ephys-data'
+      AWS_SECRETS_NAME: '/aind/data/transfer/secrets'
+      AWS_PARAM_STORE: '/aind/data/transfer/endpoints'
+    steps:
+      - uses: actions/checkout@master
+        with:
+          fetch-depth: 2
+      - name: Pull latest changes
+        run: git pull origin main
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.8
+      - name: create and upload folders
+        run: |
+          python -m pip install --no-cache-dir -r upload_scripts/requirements.txt
+          echo "Running upload data script"
+          python upload_scripts/upload_data.py -b ${AWS_BUCKET} -p ${AWS_PARAM_STORE} -s ${AWS_SECRETS_NAME}
