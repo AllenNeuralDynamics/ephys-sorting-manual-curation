@@ -149,7 +149,7 @@ def register_to_codeocean(
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
-    co_token = secrets["code_ocean_api_token"]
+    co_token = secrets["codeocean_api_token"]
     co_domain = params["codeocean_domain"]
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
@@ -176,7 +176,7 @@ def register_to_codeocean(
     run_response = co_client.run_capsule(
         capsule_id=capsule_id,
         data_assets=[],
-        parameters=[co_job_params],
+        parameters=[json.dumps(co_job_params)],
     )
     print(run_response.json())
 
