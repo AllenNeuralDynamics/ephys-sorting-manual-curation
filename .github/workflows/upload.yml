@@ -12,6 +12,7 @@ jobs:
       AWS_BUCKET: 'aind-ephys-data'
       AWS_SECRETS_NAME: '/aind/data/transfer/secrets'
       AWS_PARAM_STORE: '/aind/data/transfer/endpoints'
+      AWS_DEFAULT_REGION: 'us-west-2'
     steps:
       - uses: actions/checkout@master
         with:
