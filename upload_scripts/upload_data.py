@@ -156,7 +156,8 @@ def register_to_codeocean(
 
     # It'd be nice if these were pulled from an Enum
     custom_metadata = {
-        "modality": "extracellular electrophysiology",
+        "modality": "Extracellular electrophysiology",
+        "experiment type": "ecephys",
         "data level": "derived data",
         "subject id": subject_id,
     }
