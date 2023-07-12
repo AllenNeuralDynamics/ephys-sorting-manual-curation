@@ -12,10 +12,15 @@ from typing import Optional
 
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
-from aind_data_schema.data_description import (DataRegex,
-                                               DerivedDataDescription, Funding,
-                                               Institution, Modality,
-                                               build_data_name)
+from aind_data_schema.data_description import (
+    DataRegex,
+    DerivedDataDescription,
+    Funding,
+    Institution,
+    Modality,
+    ExperimentType,
+    build_data_name,
+)
 from botocore.exceptions import ClientError
 
 
@@ -97,7 +102,8 @@ def upload_derived_data_contents_to_s3(
     creation_datetime = (
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
-    modality = Modality.ECEPHYS.value
+    modality = [Modality.ECEPHYS]
+    experiment_type = ExperimentType.ECEPHYS
     institution = Institution.AIND.value
     m = re.match(f"{DataRegex.RAW_DATA.value}", path_to_curated_dir.name)
     subject_id = m.group(2)
@@ -109,8 +115,10 @@ def upload_derived_data_contents_to_s3(
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
+        experiment_type=experiment_type,
         institution=institution,
         subject_id=subject_id,
+        investigators=[],
         funding_source=funding_source,
     )
 
