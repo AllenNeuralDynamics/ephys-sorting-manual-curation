@@ -12,6 +12,7 @@ from typing import Optional
 
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
+from aind_codeocean_api.models.computations_requests import RunCapsuleRequest
 from aind_data_schema.data_description import (
     DataRegex,
     DerivedDataDescription,
@@ -182,10 +183,13 @@ def register_to_codeocean(
         }
     }
 
-    run_response = co_client.run_capsule(
+    run_capsule_request = RunCapsuleRequest(
         capsule_id=capsule_id,
-        data_assets=[],
         parameters=[json.dumps(co_job_params)],
+    )
+
+    run_response = co_client.run_capsule(
+        request=run_capsule_request
     )
     print(run_response.json())
 
