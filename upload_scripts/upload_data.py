@@ -13,15 +13,16 @@ from typing import Optional
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
 from aind_codeocean_api.models.computations_requests import RunCapsuleRequest
-from aind_data_schema.data_description import (
+from aind_data_schema.core.data_description import (
+    DataLevel,
     DataRegex,
     DerivedDataDescription,
     Funding,
-    Institution,
-    Modality,
-    ExperimentType,
     build_data_name,
 )
+from aind_data_schema.models.institutions import Institution
+from aind_data_schema.models.modalities import Modality
+from aind_data_schema.models.platforms import Platform
 from botocore.exceptions import ClientError
 
 
@@ -104,31 +105,29 @@ def upload_derived_data_contents_to_s3(
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    experiment_type = ExperimentType.ECEPHYS
+    ecephys_platform = Platform.ECEPHYS
     institution = Institution.AIND.value
-    m = re.match(f"{DataRegex.RAW_DATA.value}", path_to_curated_dir.name)
-    subject_id = m.group(2)
+    m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
+    mouse_subject_id = m.group(2)
     funding_source = [Funding(funder=institution)]
 
     derived_data = DerivedDataDescription(
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        creation_time=creation_datetime,
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
-        experiment_type=experiment_type,
+        platform=ecephys_platform,
         institution=institution,
-        subject_id=subject_id,
+        subject_id=mouse_subject_id,
         investigators=[],
         funding_source=funding_source,
     )
 
     new_path_name_suffix = build_data_name(
         label=process_name,
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        creation_datetime=creation_datetime,
     )
-    s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
+    out_s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
 
     with tempfile.TemporaryDirectory() as td:
         files_to_upload_path = os.path.join(td, "files_to_upload")
@@ -136,25 +135,25 @@ def upload_derived_data_contents_to_s3(
         derived_data_filename = derived_data.default_filename()
         output_file_name = os.path.join(files_to_upload_path, derived_data_filename)
         with open(output_file_name, "w") as f:
-            f.write(derived_data.json(indent=3))
+            f.write(derived_data.model_dump_json(indent=3))
         if platform.system() == "Windows":
             shell = True
         else:
             shell = False
-        aws_dest = f"s3://{s3_bucket}/{s3_prefix}"
+        aws_dest = f"s3://{s3_bucket}/{out_s3_prefix}"
         base_command = ["aws", "s3", "sync", files_to_upload_path, aws_dest]
         if dryrun:
             base_command.append("--dryrun")
         subprocess.run(base_command, shell=shell)
-    return s3_prefix, subject_id
+    return out_s3_prefix, mouse_subject_id
 
 
 def register_to_codeocean(
     param_store_name: str,
     secrets_name: str,
     s3_bucket: str,
-    s3_prefix: str,
-    subject_id: str,
+    out_s3_prefix: str,
+    mouse_subject_id: str,
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
@@ -163,21 +162,25 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
-    # It'd be nice if these were pulled from an Enum
     custom_metadata = {
-        "modality": "Extracellular electrophysiology",
-        "experiment type": "ecephys",
-        "data level": "derived data",
-        "subject id": subject_id,
+        "modality": Modality.ECEPHYS.name,
+        "platform": Platform.ECEPHYS.abbreviation,
+        "data level": DataLevel.DERIVED.value,
+        "subject id": mouse_subject_id,
     }
-    tags = ["ecephys", subject_id, "curated"]
+    tags = [
+        Platform.ECEPHYS.abbreviation,
+        mouse_subject_id,
+        "curated",
+        DataLevel.DERIVED.value,
+    ]
 
     co_job_params = {
         "trigger_codeocean_job": {
             "job_type": "register_data",
             "capsule_id": capsule_id,
             "bucket": s3_bucket,
-            "prefix": s3_prefix,
+            "prefix": out_s3_prefix,
             "tags": tags,
             "custom_metadata": custom_metadata,
         }
@@ -188,9 +191,7 @@ def register_to_codeocean(
         parameters=[json.dumps(co_job_params)],
     )
 
-    run_response = co_client.run_capsule(
-        request=run_capsule_request
-    )
+    run_response = co_client.run_capsule(request=run_capsule_request)
     print(run_response.json())
 
     return None
@@ -221,8 +222,8 @@ if __name__ == "__main__":
                 param_store_name=args.param_store,
                 secrets_name=args.secrets_name,
                 s3_bucket=args.s3_bucket,
-                s3_prefix=s3_prefix,
-                subject_id=subject_id,
+                out_s3_prefix=s3_prefix,
+                mouse_subject_id=subject_id,
             )
         else:
             print(
