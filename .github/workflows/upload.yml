@@ -9,7 +9,7 @@ jobs:
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY}}
-      AWS_BUCKET: 'aind-ephys-data'
+      AWS_BUCKET: 'aind-private-data-prod-o5171v'
       AWS_SECRETS_NAME: '/aind/data/transfer/secrets'
       AWS_PARAM_STORE: '/aind/data/transfer/endpoints'
       AWS_DEFAULT_REGION: 'us-west-2'

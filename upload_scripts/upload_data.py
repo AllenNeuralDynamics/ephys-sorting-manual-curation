@@ -13,13 +13,14 @@ from typing import Optional
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
 from aind_codeocean_api.models.computations_requests import RunCapsuleRequest
-from aind_data_schema.data_description import (
+from aind_data_schema.models.platforms import Platform
+from aind_data_schema.models.organizations import Organization
+from aind_data_schema.core.data_description import (
+    DataLevel,
     DataRegex,
     DerivedDataDescription,
     Funding,
-    Institution,
     Modality,
-    ExperimentType,
     build_data_name,
 )
 from botocore.exceptions import ClientError
@@ -52,11 +53,12 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
+    commit_pattern = re.compile(r'^[AM]\t([\w\/]+)')
     root_folders_added = set(
         [
-            f.split("\t")[-1].split("/")[0]
-            for f in files_in_last_commit.split("\n")
-            if f.startswith("A\tecephys")
+            match.group(1).split("/")[0]
+            for match in commit_pattern.finditer(files_in_last_commit)
+            if match.group(1).split("/")[0] in Platform._abbreviation_map
         ]
     )
 
@@ -104,9 +106,9 @@ def upload_derived_data_contents_to_s3(
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    experiment_type = ExperimentType.ECEPHYS
-    institution = Institution.AIND.value
-    m = re.match(f"{DataRegex.RAW_DATA.value}", path_to_curated_dir.name)
+    institution = Organization.AIND.value
+    m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
+    platform = m.group(1)
     subject_id = m.group(2)
     funding_source = [Funding(funder=institution)]
 
@@ -116,13 +118,14 @@ def upload_derived_data_contents_to_s3(
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
-        experiment_type=experiment_type,
+        platform=platform,
         institution=institution,
         subject_id=subject_id,
         investigators=[],
         funding_source=funding_source,
     )
 
+    # update build_data_name
     new_path_name_suffix = build_data_name(
         label=process_name,
         creation_date=creation_datetime.date(),
@@ -163,14 +166,17 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
+    m = re.match(f"{DataRegex.RAW.value}", s3_prefix.split('_')[0])
+    experiment_type = m.group(1)
     # It'd be nice if these were pulled from an Enum
     custom_metadata = {
         "modality": "Extracellular electrophysiology",
-        "experiment type": "ecephys",
-        "data level": "derived data",
+        "platform": platform,
+        "data level": DataLevel.DERIVED.value,
         "subject id": subject_id,
     }
-    tags = ["ecephys", subject_id, "curated"]
+    # check if we still want ecephys (for modality)
+    tags = ["ecephys", platform, subject_id, "curated", DataLevel.DERIVED.value]
 
     co_job_params = {
         "trigger_codeocean_job": {
