@@ -1,7 +1,7 @@
 import argparse
 import json
 import os.path
-import platform
+import platform as system_platform
 import re
 import shutil
 import subprocess
@@ -13,20 +13,21 @@ from typing import Optional
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
 from aind_codeocean_api.models.computations_requests import RunCapsuleRequest
-from aind_data_schema.data_description import (
+from aind_data_schema.core.data_description import (
+    DataLevel,
     DataRegex,
     DerivedDataDescription,
     Funding,
-    Institution,
     Modality,
-    ExperimentType,
     build_data_name,
 )
+from aind_data_schema.models.organizations import Organization
+from aind_data_schema.models.platforms import Platform
 from botocore.exceptions import ClientError
 
 
 def _get_list_of_folders_to_upload():
-    if platform.system() == "Windows":
+    if system_platform.system() == "Windows":
         shell = True
     else:
         shell = False
@@ -44,6 +45,13 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
+    author_from_commit = str(
+        subprocess.run(
+            ["git", "show", "-s", "--format=%an", latest_commit_id],
+            stdout=subprocess.PIPE,
+            shell=shell,
+        ).stdout.decode("utf-8")
+    )
     datetime_from_commit = datetime.utcfromtimestamp(latest_commit_timestamp)
     files_in_last_commit = str(
         subprocess.run(
@@ -52,15 +60,21 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
-    root_folders_added = set(
-        [
-            f.split("\t")[-1].split("/")[0]
-            for f in files_in_last_commit.split("\n")
-            if f.startswith("A\tecephys")
-        ]
-    )
+    files_in_last_commit_list = files_in_last_commit.split("\n")
+    root_folders_added = set()
+    platform_abbreviations = list(Platform._abbreviation_map.keys())
+    commit_pattern = re.compile(r"^[AM]\s+([\w-]+)/")
+    for line in files_in_last_commit_list:
+        print(line)
+        print(f"R: {re.match(commit_pattern, line)}")
+        if (
+            re.match(commit_pattern, line)
+            and re.match(commit_pattern, line).group(1).split("_")[0]
+            in platform_abbreviations
+        ):
+            root_folders_added.add(re.match(commit_pattern, line).group(1))
 
-    return datetime_from_commit, root_folders_added
+    return author_from_commit, datetime_from_commit, root_folders_added
 
 
 def _download_params_from_aws(store_name):
@@ -96,6 +110,7 @@ def _download_secrets_from_aws(secrets_name):
 def upload_derived_data_contents_to_s3(
     path_to_curated_dir: Path,
     s3_bucket: str,
+    author_from_commit: str,
     datetime_from_commit: Optional[datetime] = None,
     dryrun=None,
 ):
@@ -104,29 +119,27 @@ def upload_derived_data_contents_to_s3(
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    experiment_type = ExperimentType.ECEPHYS
-    institution = Institution.AIND.value
-    m = re.match(f"{DataRegex.RAW_DATA.value}", path_to_curated_dir.name)
+    investigators = [author_from_commit]
+    institution = Organization.AIND
+    m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
+    platform = m.group(1)
     subject_id = m.group(2)
-    funding_source = [Funding(funder=institution)]
+    funding_source = [Funding(funder=Organization.AI)]
 
     derived_data = DerivedDataDescription(
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        creation_time=creation_datetime,
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
-        experiment_type=experiment_type,
+        platform=Platform.from_abbreviation(platform),
         institution=institution,
         subject_id=subject_id,
-        investigators=[],
+        investigators=investigators,
         funding_source=funding_source,
     )
 
     new_path_name_suffix = build_data_name(
-        label=process_name,
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        label=process_name, creation_datetime=creation_datetime
     )
     s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
 
@@ -136,8 +149,8 @@ def upload_derived_data_contents_to_s3(
         derived_data_filename = derived_data.default_filename()
         output_file_name = os.path.join(files_to_upload_path, derived_data_filename)
         with open(output_file_name, "w") as f:
-            f.write(derived_data.json(indent=3))
-        if platform.system() == "Windows":
+            json.dump(json.loads(derived_data.model_dump_json()), f, indent=3)
+        if system_platform.system() == "Windows":
             shell = True
         else:
             shell = False
@@ -146,7 +159,7 @@ def upload_derived_data_contents_to_s3(
         if dryrun:
             base_command.append("--dryrun")
         subprocess.run(base_command, shell=shell)
-    return s3_prefix, subject_id
+    return s3_prefix, subject_id, platform
 
 
 def register_to_codeocean(
@@ -155,6 +168,7 @@ def register_to_codeocean(
     s3_bucket: str,
     s3_prefix: str,
     subject_id: str,
+    platform_abbr: str,
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
@@ -163,14 +177,15 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
-    # It'd be nice if these were pulled from an Enum
+    # For legacy purposes, the custom metadata still needs the experiment_type
+    # key
     custom_metadata = {
         "modality": "Extracellular electrophysiology",
-        "experiment type": "ecephys",
-        "data level": "derived data",
+        "experiment type": platform_abbr,
+        "data level": DataLevel.DERIVED.value,
         "subject id": subject_id,
     }
-    tags = ["ecephys", subject_id, "curated"]
+    tags = ["ecephys", subject_id, "curated", platform_abbr, DataLevel.DERIVED.value]
 
     co_job_params = {
         "trigger_codeocean_job": {
@@ -188,9 +203,7 @@ def register_to_codeocean(
         parameters=[json.dumps(co_job_params)],
     )
 
-    run_response = co_client.run_capsule(
-        request=run_capsule_request
-    )
+    run_response = co_client.run_capsule(request=run_capsule_request)
     print(run_response.json())
 
     return None
@@ -205,15 +218,25 @@ if __name__ == "__main__":
     parser.set_defaults(dry_run=False)
     args = parser.parse_args()
 
-    datetime_of_commit, folders_added = _get_list_of_folders_to_upload()
+    (
+        author_of_commit,
+        datetime_of_commit,
+        folders_added,
+    ) = _get_list_of_folders_to_upload()
     print("Datetime of last commit: ", datetime_of_commit)
+    print("Author of last commit: ", author_of_commit)
     print("Ecephys folders added in last commit: ", folders_added)
 
     for folder_name in folders_added:
-        s3_prefix, subject_id = upload_derived_data_contents_to_s3(
+        (
+            main_s3_prefix,
+            main_subject_id,
+            main_platform,
+        ) = upload_derived_data_contents_to_s3(
             path_to_curated_dir=Path(folder_name),
             s3_bucket=args.s3_bucket,
             datetime_from_commit=datetime_of_commit,
+            author_from_commit=author_of_commit,
             dryrun=args.dry_run,
         )
         if args.dry_run is False:
@@ -221,11 +244,12 @@ if __name__ == "__main__":
                 param_store_name=args.param_store,
                 secrets_name=args.secrets_name,
                 s3_bucket=args.s3_bucket,
-                s3_prefix=s3_prefix,
-                subject_id=subject_id,
+                s3_prefix=main_s3_prefix,
+                subject_id=main_subject_id,
+                platform_abbr=main_platform,
             )
         else:
             print(
                 f"Dry-run set to true. Would have tried to register "
-                f"s3://{args.s3_bucket}/{s3_prefix}"
+                f"s3://{args.s3_bucket}/{main_s3_prefix}"
             )
