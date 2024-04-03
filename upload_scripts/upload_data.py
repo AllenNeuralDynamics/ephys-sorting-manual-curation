@@ -113,8 +113,7 @@ def upload_derived_data_contents_to_s3(
     funding_source = [Funding(funder=institution)]
 
     derived_data = DerivedDataDescription(
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        creation_time=creation_datetime,
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
@@ -125,11 +124,9 @@ def upload_derived_data_contents_to_s3(
         funding_source=funding_source,
     )
 
-    # update build_data_name
     new_path_name_suffix = build_data_name(
         label=process_name,
-        creation_date=creation_datetime.date(),
-        creation_time=creation_datetime.time(),
+        creation_datetime=creation_datetime
     )
     s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
 
@@ -167,7 +164,7 @@ def register_to_codeocean(
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
     m = re.match(f"{DataRegex.RAW.value}", s3_prefix.split('_')[0])
-    experiment_type = m.group(1)
+    platform = m.group(1)
     # It'd be nice if these were pulled from an Enum
     custom_metadata = {
         "modality": "Extracellular electrophysiology",
