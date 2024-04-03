@@ -53,14 +53,13 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
-    commit_pattern = re.compile(r'^[AM]\t([\w\/]+)')
-    root_folders_added = set(
-        [
-            match.group(1).split("/")[0]
-            for match in commit_pattern.finditer(files_in_last_commit)
-            if match.group(1).split("/")[0] in Platform._abbreviation_map
-        ]
-    )
+    files_in_last_commit_list = files_in_last_commit.split("\n")
+    root_folders_added = set()
+    platform_abbreviations = list(Platform._abbreviation_map.keys())
+    commit_pattern = re.compile(r'^A\s+([\w-]+)\/')
+    for line in files_in_last_commit_list:
+        if re.match(commit_pattern, line) and re.match(commit_pattern, line).group(1).split("_")[0] in platform_abbreviations:
+            root_folders_added.add(re.match(commit_pattern, line).group(1))
 
     return datetime_from_commit, root_folders_added
 
@@ -213,7 +212,7 @@ if __name__ == "__main__":
     print("Ecephys folders added in last commit: ", folders_added)
 
     for folder_name in folders_added:
-        s3_prefix, subject_id = upload_derived_data_contents_to_s3(
+        main_s3_prefix, main_subject_id = upload_derived_data_contents_to_s3(
             path_to_curated_dir=Path(folder_name),
             s3_bucket=args.s3_bucket,
             datetime_from_commit=datetime_of_commit,
@@ -224,11 +223,11 @@ if __name__ == "__main__":
                 param_store_name=args.param_store,
                 secrets_name=args.secrets_name,
                 s3_bucket=args.s3_bucket,
-                s3_prefix=s3_prefix,
-                subject_id=subject_id,
+                s3_prefix=main_s3_prefix,
+                subject_id=main_subject_id,
             )
         else:
             print(
                 f"Dry-run set to true. Would have tried to register "
-                f"s3://{args.s3_bucket}/{s3_prefix}"
+                f"s3://{args.s3_bucket}/{main_s3_prefix}"
             )
