@@ -1,7 +1,7 @@
 import argparse
 import json
 import os.path
-import platform
+import platform as system_platform
 import re
 import shutil
 import subprocess
@@ -27,7 +27,7 @@ from botocore.exceptions import ClientError
 
 
 def _get_list_of_folders_to_upload():
-    if platform.system() == "Windows":
+    if system_platform.system() == "Windows":
         shell = True
     else:
         shell = False
@@ -109,7 +109,7 @@ def upload_derived_data_contents_to_s3(
     m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
     platform = m.group(1)
     subject_id = m.group(2)
-    funding_source = [Funding(funder=institution)]
+    funding_source = [Funding(funder=Organization.AI)]
 
     derived_data = DerivedDataDescription(
         creation_time=creation_datetime,
@@ -136,7 +136,7 @@ def upload_derived_data_contents_to_s3(
         output_file_name = os.path.join(files_to_upload_path, derived_data_filename)
         with open(output_file_name, "w") as f:
             f.write(derived_data.json(indent=3))
-        if platform.system() == "Windows":
+        if system_platform.system() == "Windows":
             shell = True
         else:
             shell = False
@@ -145,7 +145,7 @@ def upload_derived_data_contents_to_s3(
         if dryrun:
             base_command.append("--dryrun")
         subprocess.run(base_command, shell=shell)
-    return s3_prefix, subject_id
+    return s3_prefix, subject_id, platform
 
 
 def register_to_codeocean(
@@ -154,6 +154,7 @@ def register_to_codeocean(
     s3_bucket: str,
     s3_prefix: str,
     subject_id: str,
+    platform_abbr: str
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
@@ -162,17 +163,14 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
-    m = re.match(f"{DataRegex.RAW.value}", s3_prefix.split('_')[0])
-    platform = m.group(1)
     # It'd be nice if these were pulled from an Enum
     custom_metadata = {
         "modality": "Extracellular electrophysiology",
-        "platform": platform,
+        "experiment type": platform_abbr,
         "data level": DataLevel.DERIVED.value,
         "subject id": subject_id,
     }
-    # check if we still want ecephys (for modality)
-    tags = ["ecephys", platform, subject_id, "curated", DataLevel.DERIVED.value]
+    tags = ["ecephys", subject_id, "curated", platform_abbr]
 
     co_job_params = {
         "trigger_codeocean_job": {
@@ -212,7 +210,7 @@ if __name__ == "__main__":
     print("Ecephys folders added in last commit: ", folders_added)
 
     for folder_name in folders_added:
-        main_s3_prefix, main_subject_id = upload_derived_data_contents_to_s3(
+        main_s3_prefix, main_subject_id, main_platform = upload_derived_data_contents_to_s3(
             path_to_curated_dir=Path(folder_name),
             s3_bucket=args.s3_bucket,
             datetime_from_commit=datetime_of_commit,
@@ -225,6 +223,7 @@ if __name__ == "__main__":
                 s3_bucket=args.s3_bucket,
                 s3_prefix=main_s3_prefix,
                 subject_id=main_subject_id,
+                platform_abbr=main_platform
             )
         else:
             print(
