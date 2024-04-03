@@ -56,7 +56,7 @@ def _get_list_of_folders_to_upload():
     files_in_last_commit_list = files_in_last_commit.split("\n")
     root_folders_added = set()
     platform_abbreviations = list(Platform._abbreviation_map.keys())
-    commit_pattern = re.compile(r'^A\s+([\w-]+)\/')
+    commit_pattern = re.compile(r'^A\s+([\w-]+)/')
     for line in files_in_last_commit_list:
         if re.match(commit_pattern, line) and re.match(commit_pattern, line).group(1).split("_")[0] in platform_abbreviations:
             root_folders_added.add(re.match(commit_pattern, line).group(1))
