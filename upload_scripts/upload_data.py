@@ -13,8 +13,6 @@ from typing import Optional
 import boto3
 from aind_codeocean_api.codeocean import CodeOceanClient
 from aind_codeocean_api.models.computations_requests import RunCapsuleRequest
-from aind_data_schema.models.platforms import Platform
-from aind_data_schema.models.organizations import Organization
 from aind_data_schema.core.data_description import (
     DataLevel,
     DataRegex,
@@ -23,6 +21,8 @@ from aind_data_schema.core.data_description import (
     Modality,
     build_data_name,
 )
+from aind_data_schema.models.organizations import Organization
+from aind_data_schema.models.platforms import Platform
 from botocore.exceptions import ClientError
 
 
@@ -45,6 +45,13 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
+    author_from_commit = str(
+        subprocess.run(
+            ["git", "show", "-s", "--format=%an", latest_commit_id],
+            stdout=subprocess.PIPE,
+            shell=shell,
+        ).stdout.decode("utf-8")
+    )
     datetime_from_commit = datetime.utcfromtimestamp(latest_commit_timestamp)
     files_in_last_commit = str(
         subprocess.run(
@@ -56,12 +63,18 @@ def _get_list_of_folders_to_upload():
     files_in_last_commit_list = files_in_last_commit.split("\n")
     root_folders_added = set()
     platform_abbreviations = list(Platform._abbreviation_map.keys())
-    commit_pattern = re.compile(r'^A\s+([\w-]+)/')
+    commit_pattern = re.compile(r"^[AM]\s+([\w-]+)/")
     for line in files_in_last_commit_list:
-        if re.match(commit_pattern, line) and re.match(commit_pattern, line).group(1).split("_")[0] in platform_abbreviations:
+        print(line)
+        print(f"R: {re.match(commit_pattern, line)}")
+        if (
+            re.match(commit_pattern, line)
+            and re.match(commit_pattern, line).group(1).split("_")[0]
+            in platform_abbreviations
+        ):
             root_folders_added.add(re.match(commit_pattern, line).group(1))
 
-    return datetime_from_commit, root_folders_added
+    return author_from_commit, datetime_from_commit, root_folders_added
 
 
 def _download_params_from_aws(store_name):
@@ -97,6 +110,7 @@ def _download_secrets_from_aws(secrets_name):
 def upload_derived_data_contents_to_s3(
     path_to_curated_dir: Path,
     s3_bucket: str,
+    author_from_commit: str,
     datetime_from_commit: Optional[datetime] = None,
     dryrun=None,
 ):
@@ -105,7 +119,8 @@ def upload_derived_data_contents_to_s3(
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    institution = Organization.AIND.value
+    investigators = [author_from_commit]
+    institution = Organization.AIND
     m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
     platform = m.group(1)
     subject_id = m.group(2)
@@ -116,16 +131,15 @@ def upload_derived_data_contents_to_s3(
         process_name=process_name,
         input_data_name=path_to_curated_dir.name,
         modality=modality,
-        platform=platform,
+        platform=Platform.from_abbreviation(platform),
         institution=institution,
         subject_id=subject_id,
-        investigators=[],
+        investigators=investigators,
         funding_source=funding_source,
     )
 
     new_path_name_suffix = build_data_name(
-        label=process_name,
-        creation_datetime=creation_datetime
+        label=process_name, creation_datetime=creation_datetime
     )
     s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
 
@@ -135,7 +149,7 @@ def upload_derived_data_contents_to_s3(
         derived_data_filename = derived_data.default_filename()
         output_file_name = os.path.join(files_to_upload_path, derived_data_filename)
         with open(output_file_name, "w") as f:
-            f.write(derived_data.json(indent=3))
+            json.dump(json.loads(derived_data.model_dump_json()), f, indent=3)
         if system_platform.system() == "Windows":
             shell = True
         else:
@@ -154,7 +168,7 @@ def register_to_codeocean(
     s3_bucket: str,
     s3_prefix: str,
     subject_id: str,
-    platform_abbr: str
+    platform_abbr: str,
 ):
     params = _download_params_from_aws(param_store_name)
     secrets = _download_secrets_from_aws(secrets_name)
@@ -163,14 +177,15 @@ def register_to_codeocean(
     capsule_id = params["codeocean_trigger_capsule_id"]
     co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
-    # It'd be nice if these were pulled from an Enum
+    # For legacy purposes, the custom metadata still needs the experiment_type
+    # key
     custom_metadata = {
         "modality": "Extracellular electrophysiology",
         "experiment type": platform_abbr,
         "data level": DataLevel.DERIVED.value,
         "subject id": subject_id,
     }
-    tags = ["ecephys", subject_id, "curated", platform_abbr]
+    tags = ["ecephys", subject_id, "curated", platform_abbr, DataLevel.DERIVED.value]
 
     co_job_params = {
         "trigger_codeocean_job": {
@@ -188,9 +203,7 @@ def register_to_codeocean(
         parameters=[json.dumps(co_job_params)],
     )
 
-    run_response = co_client.run_capsule(
-        request=run_capsule_request
-    )
+    run_response = co_client.run_capsule(request=run_capsule_request)
     print(run_response.json())
 
     return None
@@ -205,15 +218,25 @@ if __name__ == "__main__":
     parser.set_defaults(dry_run=False)
     args = parser.parse_args()
 
-    datetime_of_commit, folders_added = _get_list_of_folders_to_upload()
+    (
+        author_of_commit,
+        datetime_of_commit,
+        folders_added,
+    ) = _get_list_of_folders_to_upload()
     print("Datetime of last commit: ", datetime_of_commit)
+    print("Author of last commit: ", author_of_commit)
     print("Ecephys folders added in last commit: ", folders_added)
 
     for folder_name in folders_added:
-        main_s3_prefix, main_subject_id, main_platform = upload_derived_data_contents_to_s3(
+        (
+            main_s3_prefix,
+            main_subject_id,
+            main_platform,
+        ) = upload_derived_data_contents_to_s3(
             path_to_curated_dir=Path(folder_name),
             s3_bucket=args.s3_bucket,
             datetime_from_commit=datetime_of_commit,
+            author_from_commit=author_of_commit,
             dryrun=args.dry_run,
         )
         if args.dry_run is False:
@@ -223,7 +246,7 @@ if __name__ == "__main__":
                 s3_bucket=args.s3_bucket,
                 s3_prefix=main_s3_prefix,
                 subject_id=main_subject_id,
-                platform_abbr=main_platform
+                platform_abbr=main_platform,
             )
         else:
             print(
