@@ -22,6 +22,7 @@ from aind_data_schema.core.data_description import (
     build_data_name,
 )
 from aind_data_schema.models.organizations import Organization
+from aind_data_schema.models.pid_names import PIDName
 from aind_data_schema.models.platforms import Platform
 from botocore.exceptions import ClientError
 
@@ -119,7 +120,7 @@ def upload_derived_data_contents_to_s3(
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    investigators = [author_from_commit]
+    investigators = [PIDName(name=author_from_commit)]
     institution = Organization.AIND
     m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
     platform = m.group(1)
