@@ -1,0 +1,29 @@
+name: Upload data
+on:
+  workflow_dispatch
+
+jobs:
+  upload-folder:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY}}
+      AWS_BUCKET: 'aind-private-data-prod-o5171v'
+      AWS_SECRETS_NAME: '/aind/data/transfer/secrets'
+      AWS_PARAM_STORE: '/aind/data/transfer/endpoints'
+      AWS_DEFAULT_REGION: 'us-west-2'
+    steps:
+      - uses: actions/checkout@master
+        with:
+          fetch-depth: 2
+      - name: Pull latest changes
+        run: git pull origin main
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.10
+      - name: create and upload folders
+        run: |
+          python -m pip install --no-cache-dir -r upload_scripts/requirements.txt
+          echo "Running upload data script"
+          python upload_scripts/upload_all_assets.py -b ${AWS_BUCKET} -p ${AWS_PARAM_STORE} -s ${AWS_SECRETS_NAME}
