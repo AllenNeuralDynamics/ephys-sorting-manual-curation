@@ -26,7 +26,8 @@ from aind_data_schema_models.platforms import Platform
 from aind_data_schema_models.pid_names import PIDName
 from botocore.exceptions import ClientError
 
-_INVESTIGATORS_GH_TO_NAME_MAP = json.loads(os.getenv("INVESTIGATORS_GH_TO_NAME_MAP"))
+
+_INVESTIGATORS_GH_TO_NAME_MAP = json.loads(os.getenv("INVESTIGATORS_GH_TO_NAME_MAP", "{}"))
 
 
 
