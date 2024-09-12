@@ -1,4 +1,5 @@
 import json
+import os
 import os.path
 import platform as system_platform
 import re
@@ -25,12 +26,9 @@ from aind_data_schema_models.platforms import Platform
 from aind_data_schema_models.pid_names import PIDName
 from botocore.exceptions import ClientError
 
-_INVESTIGATORS_GH_TO_NAME_MAP = {
-    "alakunina": "Anna Alakunina",
-    "ZhixiaoSu": "Sue Su",
-    "KanghoonJ": "Kanghoon Jung",
-    "alejoe91": "Alessio Buccino",
-}
+_INVESTIGATORS_GH_TO_NAME_MAP = json.loads(os.getenv(INVESTIGATORS_GH_TO_NAME_MAP
+ ))
+
 
 
 def _download_params_from_aws(store_name):
