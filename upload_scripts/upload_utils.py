@@ -101,7 +101,7 @@ def get_list_of_new_files_to_upload():
         if f.startswith("A") or f.startswith("M")
     ]
     curation_files_added = set()
-    platform_abbreviations = list(Platform._abbreviation_map.keys())
+    platform_abbreviations = list(Platform.abbreviation_map.keys())
     commit_pattern = re.compile(r"^[AM]\s+([\w-]+)/")
     for line in files_in_last_commit_list:
         print(f"R: {re.match(commit_pattern, line)}")
