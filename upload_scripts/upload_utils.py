@@ -1,5 +1,5 @@
-import argparse
 import json
+import os
 import os.path
 import platform as system_platform
 import re
@@ -21,12 +21,47 @@ from aind_data_schema.core.data_description import (
     Modality,
     build_data_name,
 )
-from aind_data_schema.models.organizations import Organization
-from aind_data_schema.models.platforms import Platform
+from aind_data_schema_models.organizations import Organization
+from aind_data_schema_models.platforms import Platform
+from aind_data_schema_models.pid_names import PIDName
 from botocore.exceptions import ClientError
 
 
-def _get_list_of_folders_to_upload():
+_INVESTIGATORS_GH_TO_NAME_MAP = json.loads(os.getenv("INVESTIGATORS_GH_TO_NAME_MAP", "{}"))
+
+
+
+def _download_params_from_aws(store_name):
+    """Attempt to download the endpoints from an aws parameter store"""
+    ssm_client = boto3.client("ssm")
+    try:
+        param_from_store = ssm_client.get_parameter(Name=store_name)
+        param_string = param_from_store["Parameter"]["Value"]
+        params = json.loads(param_string)
+    except ClientError as e:
+        print(f"WARNING: Unable to retrieve parameters from aws: {e.response}")
+        params = None
+    finally:
+        ssm_client.close()
+    return params
+
+
+def _download_secrets_from_aws(secrets_name):
+    """Attempt to download the endpoints from an aws secrets manager"""
+    sm_client = boto3.client("secretsmanager")
+    try:
+        secret_from_aws = sm_client.get_secret_value(SecretId=secrets_name)
+        secret_as_string = secret_from_aws["SecretString"]
+        secrets = json.loads(secret_as_string)
+    except ClientError as e:
+        print(f"WARNING: Unable to retrieve parameters from aws: {e.response}")
+        secrets = None
+    finally:
+        sm_client.close()
+    return secrets
+
+
+def get_list_of_new_files_to_upload():
     if system_platform.system() == "Windows":
         shell = True
     else:
@@ -60,66 +95,93 @@ def _get_list_of_folders_to_upload():
             shell=shell,
         ).stdout.decode("utf-8")
     )
-    files_in_last_commit_list = files_in_last_commit.split("\n")
-    root_folders_added = set()
+    files_in_last_commit_list = [
+        f
+        for f in files_in_last_commit.split("\n")
+        if f.startswith("A") or f.startswith("M")
+    ]
+    curation_files_added = set()
     platform_abbreviations = list(Platform._abbreviation_map.keys())
     commit_pattern = re.compile(r"^[AM]\s+([\w-]+)/")
     for line in files_in_last_commit_list:
-        print(line)
         print(f"R: {re.match(commit_pattern, line)}")
         if (
             re.match(commit_pattern, line)
             and re.match(commit_pattern, line).group(1).split("_")[0]
             in platform_abbreviations
         ):
-            root_folders_added.add(re.match(commit_pattern, line).group(1))
+            root_folder = re.match(commit_pattern, line).group(1)
+            if "curation" in line:
+                curation_files_added.add(line[line.find(root_folder) :])
 
-    return author_from_commit, datetime_from_commit, root_folders_added
-
-
-def _download_params_from_aws(store_name):
-    """Attempt to download the endpoints from an aws parameter store"""
-    ssm_client = boto3.client("ssm")
-    try:
-        param_from_store = ssm_client.get_parameter(Name=store_name)
-        param_string = param_from_store["Parameter"]["Value"]
-        params = json.loads(param_string)
-    except ClientError as e:
-        print(f"WARNING: Unable to retrieve parameters from aws: {e.response}")
-        params = None
-    finally:
-        ssm_client.close()
-    return params
+    return author_from_commit, datetime_from_commit, curation_files_added
 
 
-def _download_secrets_from_aws(secrets_name):
-    """Attempt to download the endpoints from an aws secrets manager"""
-    sm_client = boto3.client("secretsmanager")
-    try:
-        secret_from_aws = sm_client.get_secret_value(SecretId=secrets_name)
-        secret_as_string = secret_from_aws["SecretString"]
-        secrets = json.loads(secret_as_string)
-    except ClientError as e:
-        print(f"WARNING: Unable to retrieve parameters from aws: {e.response}")
-        secrets = None
-    finally:
-        sm_client.close()
-    return secrets
+def get_list_of_all_files_to_upload():
+    if system_platform.system() == "Windows":
+        shell = True
+    else:
+        shell = False
+    root_folder = Path(__file__).parent.parent
+
+    curation_files = [p for p in root_folder.glob("**/*.json") if "curation" in str(p)]
+    authors_from_commit = []
+    datetimes_from_commit = []
+    curation_files_to_upload = [p.relative_to(root_folder) for p in curation_files]
+
+    for curation_file in curation_files:
+        latest_commit_id = str(
+            subprocess.run(
+                ["git", "log", "-1", "--pretty=format:%h", str(curation_file)],
+                stdout=subprocess.PIPE,
+                shell=shell,
+            ).stdout.decode("utf-8")
+        )
+        latest_commit_timestamp = int(
+            subprocess.run(
+                ["git", "show", "-s", "--format=%ct", latest_commit_id],
+                stdout=subprocess.PIPE,
+                shell=shell,
+            ).stdout.decode("utf-8")
+        )
+        author_from_commit = str(
+            subprocess.run(
+                ["git", "show", "-s", "--format=%an", latest_commit_id],
+                stdout=subprocess.PIPE,
+                shell=shell,
+            ).stdout.decode("utf-8")
+        )
+        datetime_from_commit = datetime.utcfromtimestamp(latest_commit_timestamp)
+        authors_from_commit.append(author_from_commit)
+        datetimes_from_commit.append(datetime_from_commit)
+
+    return authors_from_commit, datetimes_from_commit, curation_files_to_upload
 
 
 def upload_derived_data_contents_to_s3(
-    path_to_curated_dir: Path,
+    path_to_curated_file: Path,
     s3_bucket: str,
     author_from_commit: str,
     datetime_from_commit: Optional[datetime] = None,
     dryrun=None,
 ):
-    process_name = "curated"
+    process_name = path_to_curated_file.stem.replace("curation", "curated").replace(
+        "_", "-"
+    )
+    author_from_commit = author_from_commit.replace("\n", "")
+    path_to_curated_dir = path_to_curated_file.parents[-2]
     creation_datetime = (
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
     modality = [Modality.ECEPHYS]
-    investigators = [author_from_commit]
+    investigators = [
+        PIDName(
+            name=_INVESTIGATORS_GH_TO_NAME_MAP.get(
+                author_from_commit, author_from_commit
+            )
+        )
+    ]
+    print(f"Investigators: {investigators}")
     institution = Organization.AIND
     m = re.match(f"{DataRegex.RAW.value}", path_to_curated_dir.name)
     platform = m.group(1)
@@ -144,8 +206,13 @@ def upload_derived_data_contents_to_s3(
     s3_prefix = path_to_curated_dir.name + f"_{new_path_name_suffix}"
 
     with tempfile.TemporaryDirectory() as td:
-        files_to_upload_path = os.path.join(td, "files_to_upload")
-        shutil.copytree(path_to_curated_dir, files_to_upload_path)
+        files_to_upload_path = Path(td) / "files_to_upload"
+        (files_to_upload_path / path_to_curated_file).parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        shutil.copyfile(
+            path_to_curated_file, files_to_upload_path / path_to_curated_file
+        )
         derived_data_filename = derived_data.default_filename()
         output_file_name = os.path.join(files_to_upload_path, derived_data_filename)
         with open(output_file_name, "w") as f:
@@ -158,6 +225,10 @@ def upload_derived_data_contents_to_s3(
         base_command = ["aws", "s3", "sync", files_to_upload_path, aws_dest]
         if dryrun:
             base_command.append("--dryrun")
+            print(
+                f"Dry-run set to true. Would have tried to upload "
+                f"{files_to_upload_path} tp {aws_dest}"
+            )
         subprocess.run(base_command, shell=shell)
     return s3_prefix, subject_id, platform
 
@@ -207,49 +278,3 @@ def register_to_codeocean(
     print(run_response.json())
 
     return None
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-b", "--s3-bucket", type=str)
-    parser.add_argument("-p", "--param-store", type=str)
-    parser.add_argument("-s", "--secrets-name", type=str)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.set_defaults(dry_run=False)
-    args = parser.parse_args()
-
-    (
-        author_of_commit,
-        datetime_of_commit,
-        folders_added,
-    ) = _get_list_of_folders_to_upload()
-    print("Datetime of last commit: ", datetime_of_commit)
-    print("Author of last commit: ", author_of_commit)
-    print("Ecephys folders added in last commit: ", folders_added)
-
-    for folder_name in folders_added:
-        (
-            main_s3_prefix,
-            main_subject_id,
-            main_platform,
-        ) = upload_derived_data_contents_to_s3(
-            path_to_curated_dir=Path(folder_name),
-            s3_bucket=args.s3_bucket,
-            datetime_from_commit=datetime_of_commit,
-            author_from_commit=author_of_commit,
-            dryrun=args.dry_run,
-        )
-        if args.dry_run is False:
-            register_to_codeocean(
-                param_store_name=args.param_store,
-                secrets_name=args.secrets_name,
-                s3_bucket=args.s3_bucket,
-                s3_prefix=main_s3_prefix,
-                subject_id=main_subject_id,
-                platform_abbr=main_platform,
-            )
-        else:
-            print(
-                f"Dry-run set to true. Would have tried to register "
-                f"s3://{args.s3_bucket}/{main_s3_prefix}"
-            )
