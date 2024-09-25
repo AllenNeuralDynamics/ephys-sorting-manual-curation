@@ -30,8 +30,7 @@ from botocore.exceptions import ClientError
 _INVESTIGATORS_GH_TO_NAME_MAP = json.loads(os.getenv("INVESTIGATORS_GH_TO_NAME_MAP", "{}"))
 
 
-
-def _download_params_from_aws(store_name):
+def download_params_from_aws(store_name):
     """Attempt to download the endpoints from an aws parameter store"""
     ssm_client = boto3.client("ssm")
     try:
@@ -46,7 +45,7 @@ def _download_params_from_aws(store_name):
     return params
 
 
-def _download_secrets_from_aws(secrets_name):
+def download_secrets_from_aws(secrets_name):
     """Attempt to download the endpoints from an aws secrets manager"""
     sm_client = boto3.client("secretsmanager")
     try:
@@ -169,7 +168,7 @@ def upload_derived_data_contents_to_s3(
         "_", "-"
     )
     author_from_commit = author_from_commit.replace("\n", "")
-    path_to_curated_dir = path_to_curated_file.parents[-2]
+    path_to_curated_dir = list(path_to_curated_file.parents)[-2]
     creation_datetime = (
         datetime.utcnow() if datetime_from_commit is None else datetime_from_commit
     )
@@ -227,26 +226,20 @@ def upload_derived_data_contents_to_s3(
             base_command.append("--dryrun")
             print(
                 f"Dry-run set to true. Would have tried to upload "
-                f"{files_to_upload_path} tp {aws_dest}"
+                f"{files_to_upload_path} to {aws_dest}"
             )
         subprocess.run(base_command, shell=shell)
     return s3_prefix, subject_id, platform
 
 
 def register_to_codeocean(
-    param_store_name: str,
-    secrets_name: str,
+    co_client: CodeOceanClient,
+    capsule_id: str,
     s3_bucket: str,
     s3_prefix: str,
     subject_id: str,
     platform_abbr: str,
 ):
-    params = _download_params_from_aws(param_store_name)
-    secrets = _download_secrets_from_aws(secrets_name)
-    co_token = secrets["codeocean_api_token"]
-    co_domain = params["codeocean_domain"]
-    capsule_id = params["codeocean_trigger_capsule_id"]
-    co_client = CodeOceanClient(domain=co_domain, token=co_token)
 
     # For legacy purposes, the custom metadata still needs the experiment_type
     # key
